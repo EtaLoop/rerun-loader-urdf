@@ -24,41 +24,34 @@ class URDFLogger:
         self.entity_path_prefix = entity_path_prefix
         self.mat_name_to_mat = {mat.name: mat for mat in self.urdf.materials}
 
-    def link_entity_path(self, link: urdf_parser.Link) -> str:
-        """Return the entity path for the URDF link."""
-        root_name = self.urdf.get_root()
-        link_names = self.urdf.get_chain(root_name, link.name)[0::2]  # skip the joints
-        return self.add_entity_path_prefix("/".join(link_names))
-
-    def joint_entity_path(self, joint: urdf_parser.Joint) -> str:
-        """Return the entity path for the URDF joint."""
-        root_name = self.urdf.get_root()
-        joint_names = self.urdf.get_chain(root_name, joint.child)[0::2]  # skip the links
-        return self.add_entity_path_prefix("/".join(joint_names))
-
     def add_entity_path_prefix(self, entity_path: str) -> str:
         """Add prefix (if passed) to entity path."""
         if self.entity_path_prefix is not None:
+            if self.entity_path_prefix.endswith("/"):
+                return f"{self.entity_path_prefix}{entity_path}"
             return f"{self.entity_path_prefix}/{entity_path}"
         return entity_path
 
-    def log(self) -> None:
+    def log(self, rec: rr.RecordingStream) -> None:
         """Log a URDF file to Rerun."""
-        for joint in self.urdf.joints:
-            entity_path = self.joint_entity_path(joint)
-            self.log_joint(entity_path, joint)
-
         for link in self.urdf.links:
-            entity_path = self.link_entity_path(link)
-            self.log_link(entity_path, link)
+            entity_path = self.add_entity_path_prefix(link.name)
+            self.log_link(entity_path, link, rec)
 
-    def log_link(self, entity_path: str, link: urdf_parser.Link) -> None:
+        for joint in self.urdf.joints:
+            entity_path = self.add_entity_path_prefix(joint.child)
+            self.log_joint(entity_path, joint, rec)
+
+    def log_link(self, entity_path: str, link: urdf_parser.Link, rec: rr.RecordingStream) -> None:
         """Log a URDF link to Rerun."""
         # create one mesh out of all visuals
         for i, visual in enumerate(link.visuals):
-            self.log_visual(entity_path + f"/visual_{i}", visual)
+            self.log_visual(entity_path + f"/{link.name}_{i}", visual, rec)
 
-    def log_joint(self, entity_path: str, joint: urdf_parser.Joint) -> None:
+        for i, col in enumerate(link.collisions):
+            self.log_collision(entity_path + f"/collision_{link.name}_{i}", col, rec)
+
+    def log_joint(self, entity_path: str, joint: urdf_parser.Joint, rec: rr.RecordingStream) -> None:
         """Log a URDF joint to Rerun."""
         translation = rotation = None
 
@@ -68,9 +61,9 @@ class URDFLogger:
         if joint.origin is not None and joint.origin.rpy is not None:
             rotation = st.Rotation.from_euler("xyz", joint.origin.rpy).as_matrix()
 
-        rr.log(entity_path, rr.Transform3D(translation=translation, mat3x3=rotation))
+        rr.log(entity_path, rr.Transform3D(translation=translation, mat3x3=rotation), recording=rec)
 
-    def log_visual(self, entity_path: str, visual: urdf_parser.Visual) -> None:
+    def log_visual(self, entity_path: str, visual: urdf_parser.Visual, rec: rr.RecordingStream) -> None:
         """Log a URDF visual to Rerun."""
         material = None
         if visual.material is not None:
@@ -88,10 +81,21 @@ class URDFLogger:
 
         if isinstance(visual.geometry, urdf_parser.Mesh):
             resolved_path = resolve_ros_path(visual.geometry.filename)
+            mesh_or_scene = None
             mesh_scale = visual.geometry.scale
-            mesh_or_scene = trimesh.load_mesh(resolved_path)
+
             if mesh_scale is not None:
-                transform[:3, :3] *= mesh_scale
+                rr.log(entity_path, rr.Transform3D(scale=mesh_scale), recording=rec)
+
+            # There is a bug with Rerun 0.20 with log_file and recording, that is why we call rec.to_native().
+            # This issue is supposed to be fixed in Rerun 0.21
+            # Linked issue : https://github.com/rerun-io/rerun/issues/8167
+            if resolved_path.endswith(".dae"):
+                # Replace the following lines by :
+                # rr.log_file_from_path(resolved_path, entity_path_prefix=entity_path, recording=rec)
+                rr.log_file_from_path(resolved_path, entity_path_prefix=entity_path, recording=rec.to_native())
+            else:
+                rr.log(entity_path, rr.Asset3D(path=resolved_path), recording=rec)
         elif isinstance(visual.geometry, urdf_parser.Box):
             mesh_or_scene = trimesh.creation.box(extents=visual.geometry.size)
         elif isinstance(visual.geometry, urdf_parser.Cylinder):
@@ -107,10 +111,12 @@ class URDFLogger:
             rr.log(
                 "",
                 rr.TextLog("Unsupported geometry type: " + str(type(visual.geometry))),
+                recording=rec,
             )
             mesh_or_scene = trimesh.Trimesh()
 
-        mesh_or_scene.apply_transform(transform)
+        if mesh_or_scene is not None:
+            mesh_or_scene.apply_transform(transform)
 
         if isinstance(mesh_or_scene, trimesh.Scene):
             scene = mesh_or_scene
@@ -123,8 +129,8 @@ class URDFLogger:
                     elif material.texture is not None:
                         texture_path = resolve_ros_path(material.texture.filename)
                         mesh.visual = trimesh.visual.texture.TextureVisuals(image=Image.open(texture_path))
-                log_trimesh(entity_path + f"/{i}", mesh)
-        else:
+                log_trimesh(entity_path, mesh, rec)
+        elif mesh_or_scene is not None:
             mesh = mesh_or_scene
             if material is not None and not isinstance(mesh.visual, trimesh.visual.texture.TextureVisuals):
                 if material.color is not None:
@@ -133,7 +139,79 @@ class URDFLogger:
                 elif material.texture is not None:
                     texture_path = resolve_ros_path(material.texture.filename)
                     mesh.visual = trimesh.visual.texture.TextureVisuals(image=Image.open(texture_path))
-            log_trimesh(entity_path, mesh)
+            log_trimesh(entity_path, mesh, rec)
+
+    def log_collision(self, entity_path: str, collision: urdf_parser.Collision, rec: rr.RecordingStream) -> None:
+        """Log a URDF collision to Rerun."""
+        material = None
+
+        transform = np.eye(4)
+        if collision.origin is not None and collision.origin.xyz is not None:
+            transform[:3, 3] = collision.origin.xyz
+        if collision.origin is not None and collision.origin.rpy is not None:
+            transform[:3, :3] = st.Rotation.from_euler("xyz", collision.origin.rpy).as_matrix()
+
+        if isinstance(collision.geometry, urdf_parser.Mesh):
+            resolved_path = resolve_ros_path(collision.geometry.filename)
+            mesh_or_scene = None
+            mesh_scale = collision.geometry.scale
+
+            if mesh_scale is not None:
+                rr.log(entity_path, rr.Transform3D(scale=mesh_scale), recording=rec)
+
+            # There is a bug with Rerun 0.20 with log_file and recording, that is why we call rec.to_native().
+            # This issue is supposed to be fixed in Rerun 0.21
+            # Linked issue : https://github.com/rerun-io/rerun/issues/8167
+            if resolved_path.endswith(".dae"):
+                # Replace the following lines by :
+                # rr.log_file_from_path(resolved_path, entity_path_prefix=entity_path, recording=rec)
+                rr.log_file_from_path(resolved_path, entity_path_prefix=entity_path, recording=rec.to_native())
+            else:
+                rr.log(entity_path, rr.Asset3D(path=resolved_path), recording=rec)
+        elif isinstance(collision.geometry, urdf_parser.Box):
+            mesh_or_scene = trimesh.creation.box(extents=collision.geometry.size)
+        elif isinstance(collision.geometry, urdf_parser.Cylinder):
+            mesh_or_scene = trimesh.creation.cylinder(
+                radius=collision.geometry.radius,
+                height=collision.geometry.length,
+            )
+        elif isinstance(collision.geometry, urdf_parser.Sphere):
+            mesh_or_scene = trimesh.creation.icosphere(
+                radius=collision.geometry.radius,
+            )
+        else:
+            rr.log(
+                "",
+                rr.TextLog("Unsupported geometry type: " + str(type(collision.geometry))),
+                recording=rec,
+            )
+            mesh_or_scene = trimesh.Trimesh()
+
+        if mesh_or_scene is not None:
+            mesh_or_scene.apply_transform(transform)
+
+        if isinstance(mesh_or_scene, trimesh.Scene):
+            scene = mesh_or_scene
+            # use dump to apply scene graph transforms and get a list of transformed meshes
+            for i, mesh in enumerate(scene_to_trimeshes(scene)):
+                if material is not None and not isinstance(mesh.visual, trimesh.visual.texture.TextureVisuals):
+                    if material.color is not None:
+                        mesh.visual = trimesh.visual.ColorVisuals()
+                        mesh.visual.vertex_colors = material.color.rgba
+                    elif material.texture is not None:
+                        texture_path = resolve_ros_path(material.texture.filename)
+                        mesh.visual = trimesh.visual.texture.TextureVisuals(image=Image.open(texture_path))
+                log_trimesh(entity_path, mesh, rec)
+        elif mesh_or_scene is not None:
+            mesh = mesh_or_scene
+            if material is not None and not isinstance(mesh.visual, trimesh.visual.texture.TextureVisuals):
+                if material.color is not None:
+                    mesh.visual = trimesh.visual.ColorVisuals()
+                    mesh.visual.vertex_colors = material.color.rgba
+                elif material.texture is not None:
+                    texture_path = resolve_ros_path(material.texture.filename)
+                    mesh.visual = trimesh.visual.texture.TextureVisuals(image=Image.open(texture_path))
+            log_trimesh(entity_path, mesh, rec)
 
 
 def scene_to_trimeshes(scene: trimesh.Scene) -> list[trimesh.Trimesh]:
@@ -153,7 +231,7 @@ def scene_to_trimeshes(scene: trimesh.Scene) -> list[trimesh.Trimesh]:
     return trimeshes
 
 
-def log_trimesh(entity_path: str, mesh: trimesh.Trimesh) -> None:
+def log_trimesh(entity_path: str, mesh: trimesh.Trimesh, rec: rr.RecordingStream) -> None:
     vertex_colors = albedo_texture = vertex_texcoords = None
 
     if isinstance(mesh.visual, trimesh.visual.color.ColorVisuals):
@@ -189,6 +267,7 @@ def log_trimesh(entity_path: str, mesh: trimesh.Trimesh) -> None:
             vertex_texcoords=vertex_texcoords,
         ),
         timeless=True,
+        recording=rec,
     )
 
 
@@ -272,6 +351,12 @@ def main() -> None:
     )
     parser.add_argument("filepath", type=str)
 
+    # The next two lines fix https://github.com/rerun-io/rerun/issues/8191
+    # This bug should be fixed in Rerun 0.21.
+    # Remove the next two lines when fixed.
+    parser.add_argument("--opened-application-id", type=str, help="optional recommended ID for the opened application")
+    parser.add_argument("--opened-recording-id", type=str, help="optional recommended ID for the opened recording")
+
     parser.add_argument("--application-id", type=str, help="optional recommended ID for the application")
     parser.add_argument("--recording-id", type=str, help="optional recommended ID for the recording")
     parser.add_argument("--entity-path-prefix", type=str, help="optional prefix for all entity paths")
@@ -299,14 +384,18 @@ def main() -> None:
     if not is_file or not is_urdf_file:
         exit(rr.EXTERNAL_DATA_LOADER_INCOMPATIBLE_EXIT_CODE)
 
-    if args.application_id is not None:
-        app_id = args.application_id
-    else:
-        app_id = args.filepath
+    # The next two lines fix https://github.com/rerun-io/rerun/issues/8191
+    # This bug should be fixed in Rerun 0.21.
+    # Replace the next two lines by :
+    # app_id = args.application_id or args.filepath
+    # rec_id = args.recording_id or None
 
-    rr.init(app_id, recording_id=args.recording_id)
+    app_id = args.opened_application_id or args.application_id or args.filepath
+    rec_id = args.opened_recording_id or args.recording_id or None
+
+    rec = rr.new_recording(app_id, recording_id=rec_id)
     # The most important part of this: log to standard output so the Rerun Viewer can ingest it!
-    rr.stdout()
+    rec.stdout()
 
     set_time_from_args(args)
 
@@ -316,7 +405,7 @@ def main() -> None:
         prefix = os.path.basename(args.filepath)
 
     urdf_logger = URDFLogger(args.filepath, prefix)
-    urdf_logger.log()
+    urdf_logger.log(rec)
 
 
 def set_time_from_args(args) -> None:
