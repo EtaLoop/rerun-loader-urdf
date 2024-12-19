@@ -34,13 +34,13 @@ class URDFLogger:
 
     def log(self, rec: rr.RecordingStream) -> None:
         """Log a URDF file to Rerun."""
-        for joint in self.urdf.joints:
-            entity_path = self.add_entity_path_prefix(joint.child)
-            self.log_joint(entity_path, joint)
-
         for link in self.urdf.links:
             entity_path = self.add_entity_path_prefix(link.name)
             self.log_link(entity_path, link, rec)
+
+        for joint in self.urdf.joints:
+            entity_path = self.add_entity_path_prefix(joint.child)
+            self.log_joint(entity_path, joint, rec)
 
     def log_link(self, entity_path: str, link: urdf_parser.Link, rec: rr.RecordingStream) -> None:
         """Log a URDF link to Rerun."""
@@ -48,7 +48,7 @@ class URDFLogger:
         for i, visual in enumerate(link.visuals):
             self.log_visual(entity_path + f"/{link.name}_{i}", visual, rec)
 
-    def log_joint(self, entity_path: str, joint: urdf_parser.Joint) -> None:
+    def log_joint(self, entity_path: str, joint: urdf_parser.Joint, rec: rr.RecordingStream) -> None:
         """Log a URDF joint to Rerun."""
         translation = rotation = None
 
@@ -59,7 +59,8 @@ class URDFLogger:
             rotation = st.Rotation.from_euler("xyz", joint.origin.rpy).as_matrix()
 
         entity_path = entity_path + f"/{joint.child}_0"
-        rr.log(entity_path, rr.Transform3D(translation=translation, mat3x3=rotation))
+
+        rr.log(entity_path, rr.Transform3D(translation=translation, mat3x3=rotation), recording=rec)
 
     def log_visual(self, entity_path: str, visual: urdf_parser.Visual, rec: rr.RecordingStream) -> None:
         """Log a URDF visual to Rerun."""
@@ -104,6 +105,7 @@ class URDFLogger:
             rr.log(
                 "",
                 rr.TextLog("Unsupported geometry type: " + str(type(visual.geometry))),
+                recording=rec,
             )
             mesh_or_scene = trimesh.Trimesh()
 
