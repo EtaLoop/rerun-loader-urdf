@@ -52,3 +52,9 @@ or you can open it directly from the terminal like:
 ```bash
 rerun example.urdf
 ```
+
+
+# Temporary fix
+This version of the package overcomes issue https://github.com/rerun-io/rerun/issues/8191.
+In the currect version of rerun, external data loaders lack parameters opened_recording_id and opened_application_id.
+Once the above issue is fixed, follow the instruction on line [356](https://github.com/EtaLoop/rerun-loader-urdf/blob/c925106808a4c63179b69aca14a9b6cfa5b27fc3/rerun_loader_urdf.py#L356) and [389](https://github.com/EtaLoop/rerun-loader-urdf/blob/c925106808a4c63179b69aca14a9b6cfa5b27fc3/rerun_loader_urdf.py#L389).
