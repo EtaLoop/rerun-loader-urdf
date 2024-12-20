@@ -352,8 +352,8 @@ def main() -> None:
     parser.add_argument("filepath", type=str)
 
     # The next two lines fix https://github.com/rerun-io/rerun/issues/8191
-    # This bug should ne fixed in Rerun 0.21.
-    # Remove the next two lines.
+    # This bug should be fixed in Rerun 0.21.
+    # Remove the next two lines when fixed.
     parser.add_argument("--opened-application-id", type=str, help="optional recommended ID for the opened application")
     parser.add_argument("--opened-recording-id", type=str, help="optional recommended ID for the opened recording")
 
@@ -385,8 +385,8 @@ def main() -> None:
         exit(rr.EXTERNAL_DATA_LOADER_INCOMPATIBLE_EXIT_CODE)
 
     # The next two lines fix https://github.com/rerun-io/rerun/issues/8191
-    # This bug should ne fixed in Rerun 0.21.
-    # Replace the next two lines by : 
+    # This bug should be fixed in Rerun 0.21.
+    # Replace the next two lines by :
     # app_id = args.application_id or args.filepath
     # rec_id = args.recording_id or None
 
