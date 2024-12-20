@@ -61,10 +61,7 @@ class URDFLogger:
         if joint.origin is not None and joint.origin.rpy is not None:
             rotation = st.Rotation.from_euler("xyz", joint.origin.rpy).as_matrix()
 
-        entity_path = entity_path + f"/{joint.child}_0"
-
         rr.log(entity_path, rr.Transform3D(translation=translation, mat3x3=rotation), recording=rec)
-        rr.log("collision_" + entity_path, rr.Transform3D(translation=translation, mat3x3=rotation), recording=rec)
 
     def log_visual(self, entity_path: str, visual: urdf_parser.Visual, rec: rr.RecordingStream) -> None:
         """Log a URDF visual to Rerun."""
